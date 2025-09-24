@@ -62,19 +62,38 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         }
 
         // Validate file upload
-        if (!isset($_FILES["validID_front"]) || $_FILES["validID_front"]["error"] !== UPLOAD_ERR_OK) {
+        // Determine which file field has the uploaded ID based on category sections
+        $fileFieldCandidates = ['self_validID_front', 'child_validID_front', 'senior_validID_front', 'validID_front']; // include legacy name for safety
+        $activeFileField = null;
+        foreach ($fileFieldCandidates as $candidate) {
+            if (isset($_FILES[$candidate]) && is_array($_FILES[$candidate]) && $_FILES[$candidate]['error'] === UPLOAD_ERR_OK) {
+                $activeFileField = $candidate;
+                break;
+            }
+        }
+
+        if ($activeFileField === null) {
+            // Fallback: accept any uploaded file present in $_FILES even if error code is unreliable
+            foreach ($_FILES as $fname => $fdata) {
+                if (is_array($fdata) && !empty($fdata['tmp_name']) && (isset($fdata['size']) && (int)$fdata['size'] > 0)) {
+                    $activeFileField = $fname;
+                    break;
+                }
+            }
+        }
+
+        if ($activeFileField === null) {
             $errors[] = "Valid ID is required";
         } else {
-            // Check file type
             $allowedTypes = ['image/jpeg', 'image/png', 'image/jpg'];
-            $fileType = $_FILES["validID_front"]["type"];
-            $fileSize = $_FILES["validID_front"]["size"];
+            $fileType = $_FILES[$activeFileField]["type"] ?? '';
+            $fileSize = $_FILES[$activeFileField]["size"] ?? 0;
             $maxSize = 5 * 1024 * 1024; // 5MB
-            
+
             if (!in_array($fileType, $allowedTypes)) {
                 $errors[] = "Invalid file type. Please upload JPEG or PNG images only";
             }
-            
+
             if ($fileSize > $maxSize) {
                 $errors[] = "File size exceeds the 5MB limit";
             }
@@ -105,11 +124,11 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 $uploadDir = "images/uploads/IDs/"; // Ensure this directory exists and is writable
                 
                 // Generate unique filename to prevent overwriting
-                $fileExtension = pathinfo($_FILES["validID_front"]["name"], PATHINFO_EXTENSION);
+                $fileExtension = pathinfo($_FILES[$activeFileField]["name"], PATHINFO_EXTENSION);
                 $newFileName = uniqid('id_') . '.' . $fileExtension;
                 $validIdFrontPath = $uploadDir . $newFileName;
 
-                if (!move_uploaded_file($_FILES["validID_front"]["tmp_name"], $validIdFrontPath)) {
+                if (!move_uploaded_file($_FILES[$activeFileField]["tmp_name"], $validIdFrontPath)) {
                     $errors[] = "Error uploading files. Please try again.";
                 } else {
                     // Insert into pending_users table
@@ -685,6 +704,36 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         const childFields = document.getElementById("childFields");
         const seniorFields = document.getElementById("seniorFields");
 
+        // Ensure only ONE file input (in selected category) is enabled and named "validID_front"
+        function setFileFieldForVisibleSection() {
+            const map = { self: selfFields, child: childFields, senior: seniorFields };
+            const selected = category.value in map ? map[category.value] : selfFields;
+
+            // 1) Globally sanitize all file inputs: remove name/required and disable
+            document.querySelectorAll('.file-upload input[type="file"]').forEach(input => {
+                input.removeAttribute('name');
+                input.removeAttribute('required');
+                input.setAttribute('disabled', 'disabled');
+            });
+
+            // 2) In the selected section, pick the first file input as authoritative
+            if (selected) {
+                const inputs = selected.querySelectorAll('input[type="file"]');
+                if (inputs.length > 0) {
+                    const primary = inputs[0];
+                    primary.removeAttribute('disabled');
+                    primary.setAttribute('name', 'validID_front');
+                    primary.setAttribute('required', 'required');
+                    // Ensure any other file inputs in this section remain disabled and unnamed
+                    inputs.forEach((inp, idx) => {
+                        if (idx === 0) return;
+                        inp.removeAttribute('name');
+                        inp.setAttribute('disabled', 'disabled');
+                    });
+                }
+            }
+        }
+
 
         category.addEventListener("change", function() {
             selfFields.classList.add("hidden");
@@ -698,9 +747,14 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             } else if (this.value === "senior") {
             seniorFields.classList.remove("hidden");
             }
+
+            // Sync file input attributes for the currently visible section
+            setFileFieldForVisibleSection();
         });
 
         document.addEventListener("DOMContentLoaded", function () {
+            // Initial sync on load
+            setFileFieldForVisibleSection();
             // Form Step Navigation
             let currentStep = 0;
             const steps = document.querySelectorAll(".form-step");
@@ -924,8 +978,11 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 // Clear all previous errors
                 inputs.forEach(input => removeFieldError(input));
                 
-                // Validate each field
+                // Validate each field (only visible ones)
                 inputs.forEach(input => {
+                    // Skip inputs contained within elements hidden by class 'hidden'
+                    if (input.closest('.hidden')) return;
+
                     const fieldName = input.getAttribute("name");
                     if (!fieldName || !formFields[fieldName]) return;
                     
@@ -1099,6 +1156,14 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
             // Initialize form
             updateStep(currentStep);
+
+            // Ensure correct file input naming/enabling before submit
+            const formEl = document.querySelector('form.register-form');
+            if (formEl) {
+                formEl.addEventListener('submit', function() {
+                    setFileFieldForVisibleSection();
+                });
+            }
         });
 
         // Modal functions

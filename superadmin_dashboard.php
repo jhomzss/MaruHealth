@@ -19,75 +19,135 @@ $adminName = $admin ? $admin['full_name'] : $_SESSION['admin_name'];
 $adminRole = $admin ? $admin['role'] : $_SESSION['admin_role'];
 $displayRole = ucwords(str_replace('_', ' ', $adminRole));
 
+// Helper to check if a table exists
+function tableExists(PDO $conn, string $tableName): bool {
+    try {
+        $stmt = $conn->prepare("SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = :t");
+        $stmt->bindParam(':t', $tableName);
+        $stmt->execute();
+        return (bool)$stmt->fetchColumn();
+    } catch (Exception $e) {
+        return false;
+    }
+}
+
+$hasPendingUsers = tableExists($conn, 'pending_users');
+$hasMedicineRequests = tableExists($conn, 'medicine_requests');
+$hasMedicines = tableExists($conn, 'medicines');
+$hasAnnouncements = tableExists($conn, 'announcements');
+$hasEvents = tableExists($conn, 'events');
+$hasUsers = tableExists($conn, 'users');
+$hasPatients = tableExists($conn, 'patients');
+$hasConsultations = tableExists($conn, 'consultations');
+
 // Count pending accounts
-$pendingAccountsStmt = $conn->query("SELECT COUNT(*) FROM pending_users WHERE role = 'user'");
-$pendingAccounts = $pendingAccountsStmt->fetchColumn();
+$pendingAccounts = 0;
+if ($hasPendingUsers) {
+    $pendingAccountsStmt = $conn->query("SELECT COUNT(*) FROM pending_users WHERE role = 'user'");
+    $pendingAccounts = (int)$pendingAccountsStmt->fetchColumn();
+}
 
 // Count pending medicine requests
-$pendingReqCountStmt = $conn->query("SELECT COUNT(*) FROM medicine_requests WHERE request_status = 'pending'");
-$pendingReqCount = $pendingReqCountStmt->fetchColumn();
+$pendingReqCount = 0;
+if ($hasMedicineRequests) {
+    $pendingReqCountStmt = $conn->query("SELECT COUNT(*) FROM medicine_requests WHERE request_status = 'pending'");
+    $pendingReqCount = (int)$pendingReqCountStmt->fetchColumn();
+}
 
 // Count expired medicines
-$expiredMedicinesStmt = $conn->query("SELECT COUNT(*) FROM medicines WHERE expiration_date < CURDATE() AND expiry_status = 'Expired'");
-$expiredMedicines = $expiredMedicinesStmt->fetchColumn();
+$expiredMedicines = 0;
+if ($hasMedicines) {
+    $expiredMedicinesStmt = $conn->query("SELECT COUNT(*) FROM medicines WHERE expiration_date < CURDATE() AND expiry_status = 'Expired'");
+    $expiredMedicines = (int)$expiredMedicinesStmt->fetchColumn();
+}
 
 // Count out of stock medicines
-$outOfStockMedicinesStmt = $conn->query("SELECT COUNT(*) FROM medicines WHERE stocks = 0 AND stock_status = 'Out of Stock' AND expiry_status != 'Expired'");
-$outOfStockMedicines = $outOfStockMedicinesStmt->fetchColumn();
+$outOfStockMedicines = 0;
+if ($hasMedicines) {
+    $outOfStockMedicinesStmt = $conn->query("SELECT COUNT(*) FROM medicines WHERE stocks = 0 AND stock_status = 'Out of Stock' AND expiry_status != 'Expired'");
+    $outOfStockMedicines = (int)$outOfStockMedicinesStmt->fetchColumn();
+}
 
 // Count to be claimed medicines (requests with status 'claimed', not yet picked up, and claim_until_date not expired)
-$toBeClaimedMedicinesStmt = $conn->query("SELECT COUNT(*) FROM medicine_requests WHERE request_status = 'to be claimed' AND claimed_date IS NULL AND claim_until_date >= CURDATE()");
-$toBeClaimedMedicines = $toBeClaimedMedicinesStmt->fetchColumn();
+$toBeClaimedMedicines = 0;
+if ($hasMedicineRequests) {
+    $toBeClaimedMedicinesStmt = $conn->query("SELECT COUNT(*) FROM medicine_requests WHERE request_status = 'to be claimed' AND claimed_date IS NULL AND claim_until_date >= CURDATE()");
+    $toBeClaimedMedicines = (int)$toBeClaimedMedicinesStmt->fetchColumn();
+}
 
 
 // Count active announcements
-$totalAnnouncementsStmt = $conn->query("SELECT COUNT(*) FROM announcements WHERE status = 'active'");
-$totalAnnouncements = $totalAnnouncementsStmt->fetchColumn();
+$totalAnnouncements = 0;
+if ($hasAnnouncements) {
+    $totalAnnouncementsStmt = $conn->query("SELECT COUNT(*) FROM announcements WHERE status = 'active'");
+    $totalAnnouncements = (int)$totalAnnouncementsStmt->fetchColumn();
+}
 
 // Count upcoming events
-$upcomingEventsStmt = $conn->query("SELECT COUNT(*) FROM events WHERE event_date >= CURDATE()");
-$upcomingEvents = $upcomingEventsStmt->fetchColumn();
+$upcomingEvents = 0;
+if ($hasEvents) {
+    $upcomingEventsStmt = $conn->query("SELECT COUNT(*) FROM events WHERE event_date >= CURDATE()");
+    $upcomingEvents = (int)$upcomingEventsStmt->fetchColumn();
+}
 
 // Fetch expiring medicines (Expiring within a month, a week, or already expired)
-$expiringMedicinesStmt = $conn->query("
-    SELECT generic_name, brand_name, expiration_date, expiry_status 
-    FROM medicines 
-    WHERE expiry_status IN ('Expiring within a month', 'Expiring within a week')
-    ORDER BY expiration_date ASC
-    LIMIT 5
-");
-$expiringMedicines = $expiringMedicinesStmt->fetchAll(PDO::FETCH_ASSOC);
+$expiringMedicines = [];
+if ($hasMedicines) {
+    $expiringMedicinesStmt = $conn->query("
+        SELECT generic_name, brand_name, expiration_date, expiry_status 
+        FROM medicines 
+        WHERE expiry_status IN ('Expiring within a month', 'Expiring within a week')
+        ORDER BY expiration_date ASC
+        LIMIT 5
+    ");
+    $expiringMedicines = $expiringMedicinesStmt->fetchAll(PDO::FETCH_ASSOC);
+}
 
 // Fetch low stock medicines (Low Stock or Out of Stock)
-$lowStockMedicinesStmt = $conn->query("
-    SELECT generic_name, brand_name, stocks, min_stock, stock_status 
-    FROM medicines 
-    WHERE stock_status IN ('Low Stock', 'Out of Stock')
-    AND expiry_status != 'Expired'
-    ORDER BY stocks ASC
-    LIMIT 5
-");
-$lowStockMedicines = $lowStockMedicinesStmt->fetchAll(PDO::FETCH_ASSOC);
+$lowStockMedicines = [];
+if ($hasMedicines) {
+    $lowStockMedicinesStmt = $conn->query("
+        SELECT generic_name, brand_name, stocks, min_stock, stock_status 
+        FROM medicines 
+        WHERE stock_status IN ('Low Stock', 'Out of Stock')
+        AND expiry_status != 'Expired'
+        ORDER BY stocks ASC
+        LIMIT 5
+    ");
+    $lowStockMedicines = $lowStockMedicinesStmt->fetchAll(PDO::FETCH_ASSOC);
+}
 
 
 // Count total users
-$totalUsersStmt = $conn->query("SELECT COUNT(*) FROM users");
-$totalUsers = $totalUsersStmt->fetchColumn();
+$totalUsers = 0;
+if ($hasUsers) {
+    $totalUsersStmt = $conn->query("SELECT COUNT(*) FROM users");
+    $totalUsers = (int)$totalUsersStmt->fetchColumn();
+}
 
 // Count total medicines
-$totalMedicinesStmt = $conn->query("SELECT COUNT(*) FROM medicines");
-$totalMedicines = $totalMedicinesStmt->fetchColumn();
+$totalMedicines = 0;
+if ($hasMedicines) {
+    $totalMedicinesStmt = $conn->query("SELECT COUNT(*) FROM medicines");
+    $totalMedicines = (int)$totalMedicinesStmt->fetchColumn();
+}
 
 // Count total patients
-$totalPatientsStmt = $conn->query("SELECT COUNT(*) FROM patients");
-$totalPatients = $totalPatientsStmt->fetchColumn();
+$totalPatients = 0;
+if ($hasPatients) {
+    $totalPatientsStmt = $conn->query("SELECT COUNT(*) FROM patients");
+    $totalPatients = (int)$totalPatientsStmt->fetchColumn();
+}
 
 // Count consultations this month
 $currentMonth = date('Y-m');
-$consultationsThisMonthStmt = $conn->prepare("SELECT COUNT(*) FROM consultations WHERE DATE_FORMAT(consultation_date, '%Y-%m') = :currentMonth");
-$consultationsThisMonthStmt->bindParam(':currentMonth', $currentMonth);
-$consultationsThisMonthStmt->execute();
-$consultationsThisMonth = $consultationsThisMonthStmt->fetchColumn();
+$consultationsThisMonth = 0;
+if ($hasConsultations) {
+    $consultationsThisMonthStmt = $conn->prepare("SELECT COUNT(*) FROM consultations WHERE DATE_FORMAT(consultation_date, '%Y-%m') = :currentMonth");
+    $consultationsThisMonthStmt->bindParam(':currentMonth', $currentMonth);
+    $consultationsThisMonthStmt->execute();
+    $consultationsThisMonth = (int)$consultationsThisMonthStmt->fetchColumn();
+}
 ?>
 
 <!DOCTYPE html>

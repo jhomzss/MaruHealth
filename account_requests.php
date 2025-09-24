@@ -34,6 +34,34 @@ if (isset($_GET['action']) && isset($_GET['id'])) {
             ");
             $approveStmt->execute([':id' => $pendingUserId]);
             
+            // Also create a corresponding patient record for approved user
+            try {
+                // Generate a family number if needed
+                $generatedFamilyNumber = 'FN-' . date('Ymd') . '-' . str_pad((string)random_int(0, 9999), 4, '0', STR_PAD_LEFT);
+                $patientInsert = $conn->prepare("
+                    INSERT INTO patients (
+                        family_number, first_name, middle_name, last_name, birthdate, sex,
+                        contact_number, address, status
+                    ) VALUES (
+                        :family_number, :first_name, :middle_name, :last_name, :birthdate, :sex,
+                        :contact_number, :address, 'active'
+                    )
+                ");
+                $patientInsert->execute([
+                    ':family_number' => $generatedFamilyNumber,
+                    ':first_name' => $userData['first_name'] ?? null,
+                    ':middle_name' => $userData['middle_name'] ?? null,
+                    ':last_name' => $userData['last_name'] ?? null,
+                    ':birthdate' => $userData['birthday'] ?? null,
+                    ':sex' => $userData['gender'] ?? null,
+                    ':contact_number' => $userData['phone_number'] ?? null,
+                    ':address' => $userData['address'] ?? null,
+                ]);
+            } catch (Exception $e) {
+                // Do not block approval if patient creation fails; optionally log or set a session message
+                // $_SESSION['approval_message'] = 'User approved, but failed to create patient record.';
+            }
+            
             // Compose approval email
             $subject = "Maru-Health Account Approval";
             $message = "

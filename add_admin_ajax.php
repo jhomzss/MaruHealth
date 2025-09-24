@@ -63,9 +63,12 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     if (empty($errors)) {
         $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
         
+        // Normalize role label to match dashboards and login routing
+        $dbRole = ($role === 'staff') ? 'health_staff' : $role;
+
         $insertStmt = $conn->prepare("INSERT INTO admin_staff (full_name, role, email, username, password) VALUES (:fullName, :role, :email, :username, :password)");
         $insertStmt->bindParam(':fullName', $fullName);
-        $insertStmt->bindParam(':role', $role);
+        $insertStmt->bindParam(':role', $dbRole);
         $insertStmt->bindParam(':email', $email);
         $insertStmt->bindParam(':username', $username);
         $insertStmt->bindParam(':password', $hashedPassword);

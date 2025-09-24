@@ -10,6 +10,8 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'user') {
 
 $user_id = $_SESSION['user_id'];
 $requests = []; // default to empty
+$patient = null; // linked patient record (if any)
+$consultations = []; // patient's consultation history
 
 // Fetch user details
 $sql = "SELECT first_name, last_name, middle_name, gender, birthday, address, phone_number, email, profile_picture FROM users WHERE id = :user_id";
@@ -32,6 +34,26 @@ $stmt->bindParam(':user_id', $user_id, PDO::PARAM_INT);
 $stmt->execute();
 $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+// Try to link this user to a patient record (if existing)
+try {
+    $patientLookup = $conn->prepare("SELECT * FROM patients WHERE first_name = :fn AND last_name = :ln AND birthdate = :bd ORDER BY id DESC LIMIT 1");
+    $patientLookup->execute([
+        ':fn' => $user['first_name'],
+        ':ln' => $user['last_name'],
+        ':bd' => $user['birthday']
+    ]);
+    $patient = $patientLookup->fetch(PDO::FETCH_ASSOC);
+
+    if ($patient) {
+        // Load consultations for this patient
+        $consultStmt = $conn->prepare("SELECT id, consultation_type, consultation_date, created_at FROM consultations WHERE patient_id = :pid ORDER BY consultation_date DESC");
+        $consultStmt->execute([':pid' => $patient['id']]);
+        $consultations = $consultStmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+} catch (Exception $e) {
+    // Fail silently; the Patient Record tab will show a friendly message
+}
+
 ?>
 
 <!DOCTYPE html>
@@ -46,6 +68,89 @@ $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Istok+Web&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <style>
+        /* Scoped styles for the resident consultation details modal */
+        #viewConsultationModal .modal-content {
+            width: 90%;
+            max-width: 1000px;
+            background: #fff;
+            border-radius: 10px;
+            padding: 24px;
+        }
+        #viewConsultationModal .title {
+            text-align: center;
+            color: #7A0000;
+            margin: 0 0 18px 0;
+        }
+        #viewConsultationModal .form-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+        #viewConsultationModal .form-group { width: 100%; }
+        #viewConsultationModal .form-row,
+        #viewConsultationModal .form-row-vitals {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        #viewConsultationModal label {
+            min-width: 200px;
+            font-weight: 600;
+            color: #333;
+        }
+        #viewConsultationModal input[readonly] {
+            flex: 1;
+            padding: 10px 12px;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            background: #f9f9f9;
+            color: #333;
+        }
+        #viewConsultationModal .two-col {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            column-gap: 16px;
+        }
+        #viewConsultationModal .modal-footer {
+            display: flex;
+            justify-content: flex-end;
+            margin-top: 18px;
+        }
+        #viewConsultationModal .cancel-btn {
+            background: #d1d1d1;
+            color: #111;
+            border: none;
+            padding: 10px 18px;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        #viewConsultationModal .cancel-btn:hover { background: #c4c4c4; }
+
+        /* Patient Record metrics and table styling */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            margin-bottom: 18px;
+        }
+        .metric-card {
+            background: #eee;
+            border-radius: 6px;
+            padding: 12px 16px;
+            text-align: center;
+        }
+        .metric-card .metric-label { color: #555; font-weight: 600; margin-bottom: 6px; }
+        .metric-card .metric-value { background:#fff; border-radius:6px; padding:10px 0; font-weight:600; }
+
+        .record-table { width: 100%; border-collapse: collapse; }
+        .record-table thead tr { background:#7A0000; color:#fff; }
+        .record-table th, .record-table td { padding: 12px 14px; }
+        .record-table tbody tr:nth-child(odd) { background:#f7f7f7; }
+        .record-table tbody tr:nth-child(even) { background:#eee; }
+        .record-table .view-btn { background:#3d51b5; color:#fff; border:none; padding:8px 14px; border-radius:6px; cursor:pointer; }
+        .record-table .view-btn:hover { background:#2f3ea0; }
+    </style>
 </head>
 <body>
     <nav>
@@ -99,6 +204,7 @@ $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 <div class="tab-buttons">
                     <button class="tab-button active" onclick="openTab(event, 'details')">Details</button>
                     <button class="tab-button" onclick="openTab(event, 'request-history')">Request History</button>
+                    <button class="tab-button" onclick="openTab(event, 'patient-record')">Patient Record</button>
                 </div>
                 
                 <!-- Details buttons -->
@@ -195,6 +301,65 @@ $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
                         </table>
                     </div>
                 </div>
+
+                <!-- Patient Record Tab -->
+                <div id="patient-record" class="tab-content" style="display: none;">
+                    <div class="content-con">
+                        <h3 class="title">Anthropometric Measurement</h3>
+                        <?php if ($patient): ?>
+                        <div class="metrics-grid">
+                            <div class="metric-card">
+                                <div class="metric-label">Height:</div>
+                                <div class="metric-value"><?= htmlspecialchars($patient['height'] ?? 'N/A') ?></div>
+                            </div>
+                            <div class="metric-card">
+                                <div class="metric-label">Weight:</div>
+                                <div class="metric-value"><?= htmlspecialchars($patient['weight'] ?? 'N/A') ?></div>
+                            </div>
+                            <div class="metric-card">
+                                <div class="metric-label">BMI:</div>
+                                <div class="metric-value"><?= htmlspecialchars($patient['bmi'] ?? 'N/A') ?></div>
+                            </div>
+                            <div class="metric-card">
+                                <div class="metric-label">Status:</div>
+                                <div class="metric-value"><?= htmlspecialchars($patient['bmi_status'] ?? 'N/A') ?></div>
+                            </div>
+                        </div>
+                        <?php else: ?>
+                            <p>No patient record found yet.</p>
+                        <?php endif; ?>
+                    </div>
+
+                    <div class="content-con">
+                        <h3 class="title">Consultation History</h3>
+                        <?php if ($patient && !empty($consultations)): ?>
+                            <div class="table-container">
+                                <table class="record-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Date & Time Requested</th>
+                                            <th>Type</th>
+                                            <th></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <?php foreach ($consultations as $c): ?>
+                                            <tr>
+                                                <td><?= htmlspecialchars(date('n/j/Y g:ia', strtotime($c['consultation_date']))) ?></td>
+                                                <td><?= htmlspecialchars($c['consultation_type']) ?></td>
+                                                <td><button class="view-btn" data-cid="<?= $c['id'] ?>" onclick="viewConsultation(this)">View</button></td>
+                                            </tr>
+                                        <?php endforeach; ?>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <?php elseif ($patient): ?>
+                            <p>No consultations yet.</p>
+                        <?php else: ?>
+                            <p>Consultations will appear once a patient record is created.</p>
+                        <?php endif; ?>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -217,6 +382,73 @@ $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
         </div>
     </div>
 
+    <!-- View Consultation Modal (reusing staff-like UI for residents) -->
+    <div id="viewConsultationModal" class="modal">
+        <div class="modal-content">
+            <h2 class="title">Consultation Details</h2>
+            <div class="form-grid">
+                <div class="form-group">
+                    <div class="form-row">
+                        <label>Type of Consultation</label>
+                        <input type="text" id="view_consultation_type" readonly>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <div class="form-row">
+                        <label>Date of Consultation</label>
+                        <input type="text" id="view_consultation_date" readonly>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <div class="form-row">
+                        <label>Reason for Consultation</label>
+                        <input type="text" id="view_reason_for_consultation" readonly>
+                    </div>
+                </div>
+                <div class="two-col">
+                    <div class="form-group">
+                        <div class="form-row">
+                            <label>Blood Pressure</label>
+                            <input type="text" id="view_blood_pressure" readonly>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-row">
+                            <label>Temperature</label>
+                            <input type="text" id="view_temperature" readonly>
+                        </div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <div class="form-row">
+                        <label>Diagnosis</label>
+                        <input type="text" id="view_diagnosis" readonly>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <div class="form-row">
+                        <label>Prescribed Medicine</label>
+                        <input type="text" id="view_prescribed_medicine" readonly>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <div class="form-row">
+                        <label>Treatment Given</label>
+                        <input type="text" id="view_treatment_given" readonly>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <div class="form-row">
+                        <label>Consulting Physician/Nurse</label>
+                        <input type="text" id="view_consulting_physician_nurse" readonly>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="cancel-btn" onclick="document.getElementById('viewConsultationModal').classList.remove('show')">Close</button>
+            </div>
+        </div>
+    </div>
     <div id="viewRequestModal" class="modal"> 
         <div class="modal-content">
             <h2>Request Medicine Details</h2>
@@ -337,7 +569,7 @@ $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
             for (let i = 0; i < tabButtons.length; i++) {
                 tabButtons[i].classList.remove("active");
             }
-            document.getElementById(tabName).style.display = "flex";
+            document.getElementById(tabName).style.display = tabName === 'request-history' ? 'block' : 'flex';
             evt.currentTarget.classList.add("active");
         }
 
@@ -407,6 +639,26 @@ $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
         document.querySelector("#viewRequestModal .close").addEventListener("click", function () {
             closeViewModal();
         });
+
+        function viewConsultation(btn) {
+            const cid = btn.getAttribute('data-cid');
+            fetch(`get_consultation_details.php?id=${cid}`)
+                .then(r => r.json())
+                .then(data => {
+                    // Populate modal fields similar to staff's view
+                    document.getElementById('view_consultation_type').value = data.consultation_type || '';
+                    document.getElementById('view_consultation_date').value = data.consultation_date || '';
+                    document.getElementById('view_reason_for_consultation').value = data.reason_for_consultation || '';
+                    document.getElementById('view_blood_pressure').value = data.blood_pressure || '';
+                    document.getElementById('view_temperature').value = data.temperature || '';
+                    document.getElementById('view_diagnosis').value = data.diagnosis || '';
+                    document.getElementById('view_prescribed_medicine').value = data.prescribed_medicine || '';
+                    document.getElementById('view_treatment_given').value = data.treatment_given || '';
+                    document.getElementById('view_consulting_physician_nurse').value = data.consulting_physician_nurse || '';
+                    document.getElementById('viewConsultationModal').classList.add('show');
+                })
+                .catch(() => alert('Failed to load consultation details.'));
+        }
     </script>
 </body>
 </html>
